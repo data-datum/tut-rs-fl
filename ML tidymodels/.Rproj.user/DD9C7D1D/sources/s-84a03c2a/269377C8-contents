@@ -1,0 +1,218 @@
+library(tidyverse)
+library(tidymodels)
+library(mosaicData) # para obtener la base de datos
+
+
+# REGRESIÓN LINEAL --------------------------------------------------------
+
+## Una variable respuesta o dependiente (Y) numérica: 
+### Precio de las casas en 
+
+## Uno o más predictores:
+### 
+
+
+
+
+# datos --------------------------------------------------------------
+
+casas <- mosaicData::SaratogaHouses %>% 
+  select("precio" = price, "antigüedad" = age,
+         "superficie" = livingArea, "habitaciones" = bedrooms)
+
+glimpse(casas)
+
+# Tidymodels: paquetes -----------------------------------------------
+
+# parsnip: definición del modelo.
+# 
+# recipes: preprocesado de datos y feature engineering (esto último cómo se traduce??).
+# 
+# rsample: validar por resampling (esto no lo voy a usar creo).
+# 
+# dials: para crear y manejar el valor de los hiperparámetros.
+# 
+# tune: para hacer tuning de modelos.
+# 
+# yardstick: métricas de modelos.
+# 
+# workflows: combinar pasos en un objeto.
+
+
+
+# Análisis exploratorio ----------------------------------------------------------------
+
+skimr::skim(casas)
+
+casas %>% 
+  filter_all(is.na)
+
+casas %>%  
+  pivot_longer(cols = precio:habitaciones,
+               names_to = "variable",
+               values_to = "valor") %>% 
+  group_by(variable) %>% 
+  summarise_all(list(media = mean, DE = sd, min = min, max = max),
+                na.rm = TRUE)
+
+casas %>% 
+  pivot_longer(cols = precio:habitaciones,
+               names_to = "variable",
+               values_to = "valor") %>% 
+  ggplot(aes(valor)) +
+  geom_histogram() +
+  facet_wrap(. ~ variable, scales = "free")
+
+# Asociación entre las variables ------------------------------------------------
+
+casas %>% 
+  pivot_longer(cols = -c(precio, calefaccion),
+               names_to = "variable",
+               values_to = "valor") %>% 
+  ggplot(aes(valor, precio)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  facet_wrap(. ~ variable, scales = "free")
+
+
+
+# Paquete "rsample": división de los datos ----------------------------------------------
+
+
+set.seed(123)
+
+casas_split <- casas %>% initial_split(prop = .7)
+
+casas_entrenamiento <- training(casas_split)
+casas_testeo  <- testing(casas_split)
+
+summary(casas_entrenamiento$precio)
+summary(casas_testeo$precio)
+
+
+# Paquete "recipes": preprocesado de los datos -------------------------
+
+# identificar y lidiar con valores faltantes.
+# convertir predictores categóricos a variables dummy.
+# cambiar la escala de los datos.
+# extraer datos de una variable (ej. texto o fechas)
+
+# armar la receta
+casas_receta <- recipe(formula = precio ~ antigüedad + 
+                         superficie + calefaccion 
+                       + habitaciones,
+                       data = casas_entrenamiento) %>% 
+  step_naomit(all_predictors()) %>% 
+  step_center(all_numeric(), -all_outcomes()) %>%
+  step_scale(all_numeric(), -all_outcomes()) %>% 
+  step_dummy(all_nominal())
+
+casas_receta
+
+# Independiente del modelado. Puede reutilizarse. 
+# El procesamiento se realiza con poco código y en un único obj.
+
+# estima los parámetros 
+casas_prep <- prep(casas_receta)
+
+casas_prep
+
+# aplica las modificaciones a los datos de entrenamiento
+casas_entrenamiento_prep <- bake(casas_prep, new_data = casas_entrenamiento)
+casas_testeo_prep <- bake(casas_prep, new_data = casas_testeo)
+
+glimpse(casas_entrenamiento_prep)
+
+
+# Paquete "parsnip": especificar el modelo  ---------------------------------------
+
+# 1. Elegir el modelo  --> linear_reg()
+# 2. Elegir el engine  --> set_engine()
+# 3. Elegir el modo --> set_mode(): regresión y clasificación
+
+lm_modelo <- linear_reg() %>% 
+  set_engine('lm')
+
+lm_modelo
+
+lm_ajuste <- lm_modelo %>%
+  fit(precio ~ superficie,
+      data = casas_entrenamiento_prep)
+
+lm_ajuste
+
+# Explorar el ajuste:
+
+# Data frame con los coeficientes estimados
+
+tidy(lm_ajuste)
+
+# Métricas de rendimiento
+glance(lm_ajuste)
+
+
+# Aplico mi modelo a los datos de testeo -----------------------------
+
+# Evaluo la precisión de mi modelo en un nuevo set de datos
+
+resultado  <- lm_ajuste %>% 
+  predict(new_data = casas_testeo_prep) %>% 
+  bind_cols(casas_testeo_prep)
+
+head(resultado)
+
+# Calculamos distintas métricas para saber que tan bueno es nuestro modelo 
+# prediciendo los valores del nuevo set de datos. 
+
+# RMSE (root mean square error) y MAE (mean absolute error)
+
+rmse(resultado, truth = precio, estimate=.pred)
+
+mae(resultado, truth = precio, estimate=.pred)
+
+# Se expresan en las unidades de la variable dependiente.
+# Cuanto más chicos mejor.
+
+# R2: 0 a 1, cuanto más alto mejor. 
+
+rsq(resultado, truth = precio, estimate = .pred)
+
+
+# Con todos los predictores ------------------------------------------
+
+lm_ajuste2 <- lm_modelo %>%
+  fit(precio ~ antigüedad + superficie + habitaciones + 
+        calefaccion_hot.water.steam + calefaccion_electric,
+      data = casas_entrenamiento_prep)
+
+lm_ajuste2
+
+# Explorar el ajuste:
+
+tidy(lm_ajuste2)
+
+# Métricas de rendimiento
+glance(lm_ajuste2)
+
+# Evaluo la precisión de mi modelo en un nuevo set de datos
+
+resultado2  <- lm_ajuste2 %>% 
+  predict(new_data = casas_testeo_prep) %>% 
+  bind_cols(casas_testeo_prep)
+
+head(resultado2)
+
+# RMSE (root mean square error) y MAE (mean absolute error)
+
+rmse(resultado, truth = precio, estimate=.pred)
+rmse(resultado2, truth = precio, estimate=.pred)
+
+mae(resultado, truth = precio, estimate=.pred)
+mae(resultado2, truth = precio, estimate=.pred)
+
+# R2
+rsq(resultado, truth = precio, estimate = .pred)
+rsq(resultado2, truth = precio, estimate = .pred)
+
+
+

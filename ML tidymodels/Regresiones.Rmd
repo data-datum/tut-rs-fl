@@ -1,0 +1,442 @@
+---
+title: "Regresión lineal y logístia"
+author: "Jesi Formoso"
+output: html_document
+---
+
+Diapositivas:
+https://docs.google.com/presentation/d/1KfH64fZJL5EjAd0M4wPUUfIAmJdwSbMMsbm1gXqt2o8/edit?usp=sharing
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(tidymodels)
+library(mosaicData)
+library(knitr)
+
+```
+
+## Regresión
+
+Busca describir los cambios en una variable respuesta (y) en función de los cambios en una variable predictora (x) 
+
+Funciones:
+
+- Determnar como influye una variable sobre otra.
+- Predecir valores no observados.
+
+### Regresión lineal:
+## Regresión lineal
+
+
+Una variable respuesta (VD) numérica:
+
+- Precio de una casa en Saratoga, NY
+
+Uno o más predictores (VI):
+
+- Cantidad de habitaciones
+- Antigüedad de la propiedad
+- Superficie
+
+
+
+### Cargamos los datos!
+
+```{r datos, message=FALSE, warning=FALSE}
+casas <- mosaicData::SaratogaHouses %>% 
+  select("precio" = price, "antigüedad" = age,
+         "superficie" = livingArea, "habitaciones" = bedrooms,
+         "calefaccion" = heating)
+
+glimpse(casas)
+
+```
+
+
+
+### Exploramos las variables..
+
+```{r EDA, echo=FALSE, warning=FALSE}
+
+
+casas %>% 
+  filter_all(is.na) %>% 
+  summarise(missings = n()) %>% 
+  kable()
+
+
+
+casas %>%  
+  select(-calefaccion) %>% 
+  pivot_longer(cols = precio:habitaciones,
+               names_to = "variable",
+               values_to = "valor") %>% 
+  group_by(variable) %>% 
+  summarise_all(list(media = mean, DE = sd, min = min, max = max),
+               na.rm = TRUE) %>% 
+  mutate_if(is.numeric, round, 2) %>% 
+  kable()
+
+
+```
+
+
+
+
+```{r plots, echo=FALSE, warning=FALSE, message=FALSE}
+
+casas %>% 
+  pivot_longer(cols = precio:habitaciones,
+                  names_to = "variable",
+                  values_to = "valor") %>% 
+  ggplot(aes(valor)) +
+  geom_histogram() +
+  facet_wrap(. ~ variable, scales = "free")
+
+```
+
+
+
+### ¿Las variables numéricas se asocian entre sí?
+
+```{r plots2, echo=FALSE, warning=FALSE, message=FALSE, fig.width=15, fig.height=5}
+
+
+casas %>% 
+  pivot_longer(cols = -c(precio, calefaccion),
+               names_to = "variable",
+               values_to = "valor") %>% 
+  ggplot(aes(valor, precio)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  facet_wrap(. ~ variable, scales = "free")
+
+```
+
+
+### Coeficientes de correlación:
+
+```{r}
+cor(casas$antigüedad,casas$precio)
+```
+
+```{r}
+cor(casas$superficie,casas$precio)
+```
+
+```{r}
+cor(casas$habitaciones,casas$precio)
+```
+
+
+class: middle
+
+- ¿Cuál es la mejor combinación de variables para predecir el valor de una casa?
+
+- ¿Qué tan bueno es mi modelo prediciendo ese valor?
+
+
+### Dividimos el set de datos
+
+```{r rsample-dividir}
+
+set.seed(123)
+
+casas_split <- casas %>% initial_split(prop = .7)
+  
+casas_entrenamiento <- training(casas_split)
+casas_testeo  <- testing(casas_split)
+
+summary(casas_entrenamiento$precio)
+summary(casas_testeo$precio)
+
+
+```
+
+
+### Preparamos los datos para ser procesados:
+
+- identificar, eliminar o imputar valores faltantes.
+- convertir predictores categóricos en variables dummy.
+- cambiar la escala de los datos.
+- extraer datos de una variable (ej. texto o fechas)
+ 
+
+
+### Armamos la receta
+
+```{r recipes-receta}
+
+casas_receta <- recipe(formula = precio ~ habitaciones + superficie + antigüedad, data = casas_entrenamiento) %>% 
+  step_center(all_numeric(), -all_outcomes()) %>%
+  step_scale(all_numeric(), -all_outcomes()) %>% 
+  prep()
+
+casas_receta
+
+```
+
+
+```{r recipe-bake}
+
+
+casas_entrenamiento_prep <- bake(casas_receta, new_data = casas_entrenamiento)
+
+casas_testeo_prep <- bake(casas_receta, new_data = casas_testeo)
+
+glimpse(casas_entrenamiento_prep)
+
+```
+
+
+
+### Especificamos el modelo 
+
+1. Elegir el modelo  --> linear_reg()
+2. Elegir el engine  --> set_engine()
+3. Elegir el modo --> set_mode(): regresión o clasificación
+
+```{r pasnip-modelo}
+
+lm_modelo <- linear_reg() %>% 
+  set_engine('lm')
+
+lm_ajuste <- lm_modelo %>%
+  fit(precio ~ habitaciones,
+      data = casas_entrenamiento_prep)
+
+lm_ajuste
+
+```
+
+### Exploramos el ajuste:
+
+```{r resultados}
+
+tidy(lm_ajuste)
+
+glance(lm_ajuste)
+
+```
+
+### Evaluamos la precisión de nuestro modelo en un nuevo set de datos:
+```{r evaluar}
+
+resultado  <- lm_ajuste %>% 
+  predict(new_data = casas_testeo_prep) %>% 
+  bind_cols(casas_testeo_prep)
+
+head(resultado)
+
+```
+
+
+
+```{r metricas}
+
+rmse(resultado, truth = precio, estimate=.pred)
+
+mae(resultado, truth = precio, estimate=.pred)
+
+rsq(resultado, truth = precio, estimate = .pred)
+
+```
+
+
+
+### Con todos los predictores
+```{r final}
+
+lm_ajuste2 <- lm_modelo %>%
+  fit(precio ~ antigüedad + superficie + habitaciones,
+      data = casas_entrenamiento_prep)
+
+tidy(lm_ajuste2)
+
+
+```
+
+```{r final2}
+
+resultado2  <- lm_ajuste2 %>% 
+  predict(new_data = casas_testeo_prep) %>% 
+  bind_cols(casas_testeo_prep)
+
+head(resultado2)
+
+```
+
+```{r comparacion}
+rmse(resultado2, truth = precio, estimate=.pred)
+#rmse  anterior: 94430
+
+mae(resultado2, truth = precio, estimate=.pred)
+# mae anterior: 65070
+```
+
+
+## Regresión logística
+
+
+Una variable respuesta (VD) binaria:
+
+- Si la persona está viva o no 20 años después de la observación inicial.
+
+Uno o más predictores (VI):
+
+- Si fuma
+- Su edad
+
+
+
+```{r datos_whickham}
+
+fumar <- mosaicData::Whickham %>% 
+  select("muerte" = outcome, "fuma" = smoker,
+         "edad" = age) %>% 
+  mutate(muerte = as_factor(ifelse(muerte == "Dead", 1, 0)))
+
+glimpse(fumar)
+
+fumar %>% count(fuma, muerte)
+
+
+```
+
+
+### Dividimos el set de datos
+
+```{r rsample-dividir-log}
+
+set.seed(123)
+
+fumar_split <- fumar %>% initial_split(prop = .7)
+  
+fumar_entrenamiento <- training(fumar_split)
+fumar_testeo  <- testing(fumar_split)
+
+fumar_entrenamiento %>% 
+  count(fuma) %>% 
+  mutate(prop = n/sum(n))
+
+fumar_testeo  %>% 
+  count(fuma) %>% 
+  mutate(prop = n/sum(n))
+
+
+```
+
+
+### Generamos la receta:
+ 
+
+
+```{r recipes-receta-log}
+
+glm_receta <- 
+  recipe(fuma ~ ., fumar_entrenamiento) %>% 
+  step_normalize(edad) %>% 
+  prep()
+
+glm_receta
+```
+
+### Aplicamos la receta a los datos:
+
+```{r recipe-bake-log}
+
+
+fumar_entrenamiento_prep <- bake(glm_receta, new_data = fumar_entrenamiento)
+
+fumar_testeo_prep <- bake(glm_receta, new_data = fumar_testeo)
+
+```
+
+
+
+### Especificamos y ajustamos el modelo 
+
+```{r pasnip-modelo-log}
+
+glm_modelo <- 
+  logistic_reg(mode = "classification") %>%
+  set_engine(engine = "glm") %>% 
+  fit(muerte ~ ., data = fumar_entrenamiento_prep)
+
+glm_modelo
+
+```
+
+### ¿Qué tan bueno es nuestro modelo clasificando?
+
+```{r yardstick-log}
+
+glm_predicciones <- glm_modelo %>%
+  predict(new_data = fumar_testeo_prep) %>%
+  bind_cols(fumar_testeo_prep %>% select(muerte))
+
+glm_predicciones
+
+```
+
+
+
+### Accuracy, precision, recall, F1_score:
+
+```{r metricas-log, fig.height=5, fig.width=5, fig.align='right'}
+
+glm_predicciones %>%
+  conf_mat(muerte, .pred_class) %>%
+  pluck(1) %>%
+  as_tibble() %>%
+  ggplot(aes(Prediction, Truth, fill = as_factor(n))) +
+  geom_tile(show.legend = FALSE) +
+  scale_fill_brewer() +
+  geom_text(aes(label = n), size = 8)
+
+```
+
+### Accuracy: proporción de casos correctamente clasificados por el modelo:
+
+```{r metricas-log2, fig.height=5, fig.width=5, fig.align='right'}
+
+glm_predicciones %>%
+  metrics(muerte, .pred_class) %>%
+  select(-.estimator) %>%
+  filter(.metric == "accuracy") 
+```
+
+
+
+### Precisión (falsos positivos) y recall (falsos negativos):
+ 
+```{r metricas-log3, fig.height=5, fig.width=5, fig.align='right'}
+
+tibble(
+  "precisión" = 
+     precision(glm_predicciones, muerte, .pred_class) %>%
+     select(.estimate),
+  "recall" = 
+     recall(glm_predicciones, muerte, .pred_class) %>%
+     select(.estimate)
+) %>%
+  unnest() %>%
+  kable()
+```
+
+
+### F1_score
+ 
+```{r metricas-log4, fig.height=5, fig.width=5, fig.align='right'}
+
+glm_predicciones %>%
+  f_meas(muerte, .pred_class) %>%
+  select(-.estimator) %>%
+  kable()
+
+```
+
+
+# Muchas gracias!
